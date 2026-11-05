@@ -67,6 +67,16 @@ function urgencyFor(
   return "Low";
 }
 
+// Compares YYYY-MM-DD dates without timezone conversion.
+function isPastDate(dateValue: string | null | undefined): boolean {
+  if (!dateValue || !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    return false;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  return dateValue < today;
+}
+
 async function getOrder(
   db: D1Database,
   orderNumber: string | null
@@ -88,6 +98,7 @@ async function groqDraft(
     orderNumber: string | null;
     order: Order | null;
     orderFound: boolean | null;
+    deliveryOverdue: boolean;
     history: ChatMessage[];
   }
 ): Promise<string> {
@@ -117,7 +128,26 @@ STRICT RULES:
 13. Do not use email greetings or sign-offs.
 14. If the customer asks for a human agent, acknowledge the request without claiming an actual transfer.
 
+OVERDUE DELIVERY RULES:
+
+15. The deliveryOverdue value is calculated by the application using the current date and verified order record.
+16. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
+17. Clearly explain that the recorded delivery date has passed.
+18. Do not present the old delivery date as a future delivery date.
+19. Do not invent a replacement delivery date or promise when the order will arrive.
+20. Acknowledge the delay and explain that the case requires support review.
+21. Never claim that a support investigation has already started.
+
 The response is a draft for a support agent to review.
+
+Current verified context:
+- Customer message: ${input.message}
+- Detected intent: ${input.intent}
+- Urgency: ${input.urgency}
+- Order number: ${input.orderNumber ?? "Not provided"}
+- Order found: ${input.orderFound === null ? "Not applicable" : input.orderFound}
+- Delivery overdue: ${input.deliveryOverdue}
+- Verified order record: ${JSON.stringify(input.order)}
 `;
 
   const payload = {
@@ -138,6 +168,7 @@ The response is a draft for a support agent to review.
           urgency: input.urgency,
           orderNumber: input.orderNumber,
           orderFound: input.orderFound,
+          deliveryOverdue: input.deliveryOverdue,
           verifiedOrderRecord: input.order,
         }),
       },
@@ -245,13 +276,6 @@ async function handleAnalyze(
   );
 
   const intent = detectIntent(message);
-  const urgency = urgencyFor(message, intent);
-
-  const humanReviewRequired =
-    ["Payment Issue", "Human Support"].includes(intent) ||
-    (intent === "Refund" &&
-      /not arrived|overdue|late|two weeks|dispute/i.test(message));
-
   const orderRequired = [
     "Order Tracking",
     "Payment Issue",
@@ -270,6 +294,28 @@ async function handleAnalyze(
         ? Boolean(order)
         : null;
 
+  // Only undelivered orders with an expired expected delivery date
+  // are considered overdue.
+  const orderStatus = String(order?.order_status ?? "").toLowerCase();
+
+  const deliveryOverdue = Boolean(
+    order &&
+      orderStatus !== "delivered" &&
+      orderStatus !== "cancelled" &&
+      isPastDate(order.expected_delivery)
+  );
+
+  const baseUrgency = urgencyFor(message, intent);
+  const urgency: "Low" | "Medium" | "High" = deliveryOverdue
+    ? "High"
+    : baseUrgency;
+
+  const humanReviewRequired =
+    ["Payment Issue", "Human Support"].includes(intent) ||
+    deliveryOverdue ||
+    (intent === "Refund" &&
+      /not arrived|overdue|late|two weeks|dispute/i.test(message));
+
   const responseText = await groqDraft(env, {
     message,
     intent,
@@ -277,6 +323,7 @@ async function handleAnalyze(
     orderNumber: orderRequired ? orderNumber : null,
     order,
     orderFound,
+    deliveryOverdue,
     history,
   });
 
@@ -341,14 +388,17 @@ async function handleAnalyze(
     orderNumber: orderRequired ? orderNumber : null,
     orderFound,
     response: responseText,
-    reason: humanReviewRequired
-      ? "This request requires human review."
-      : "Response drafted using the available support context.",
+    reason: deliveryOverdue
+      ? "The recorded delivery date has passed. This order requires human review."
+      : humanReviewRequired
+        ? "This request requires human review."
+        : "Response drafted using the available support context.",
     order,
   };
 
   return json({
     ...result,
+    deliveryOverdue,
     conversationId,
     ticketId,
     status: humanReviewRequired ? "Review Pending" : "AI Handled",
