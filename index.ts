@@ -29,11 +29,13 @@ function detectIntent(message: string): string {
   if (/charged twice|duplicate charge|double charge|charged two times/.test(m))
     return "Payment Issue";
 
-  if (/refund|money back/.test(m))
-    return "Refund";
-
+  // Return intent takes priority over refund intent.
+  // Customers commonly mention getting money back when requesting a return.
   if (/return|replacement|wrong product|wrong item/.test(m))
     return "Return/Replacement";
+
+  if (/refund|money back/.test(m))
+    return "Refund";
 
   if (/where is my order|track|tracking|order status|delivery/.test(m))
     return "Order Tracking";
@@ -111,7 +113,7 @@ You are ResolveIQ, an AI-powered e-commerce customer support assistant.
 
 Your job is to draft concise, helpful and natural customer support responses.
 
-STRICT RULES:
+STRICT INFORMATION RULES:
 
 1. Use only verified information supplied in the order record.
 2. Never invent order numbers, payment details, refund status, tracking numbers, delivery dates or customer details.
@@ -135,17 +137,19 @@ RETURN AND REFUND SAFEGUARDS:
 17. Never invent return procedures, pickup arrangements, return addresses, return eligibility, refund conditions or processing timelines.
 18. If return instructions are not explicitly verified in the order record, explain that the return request is recorded and provide only the verified return/refund status.
 19. Never promise that a refund will automatically be processed after receiving a returned item unless the supplied record explicitly confirms that policy.
-20. If return instructions are unavailable, explain that the customer needs confirmation from support before sending the item back.
+20. Never promise that return instructions or a shipping label will be sent later unless the supplied order record explicitly confirms this.
+21. If return instructions are unavailable, explain that the customer needs confirmation from support before sending the item back.
+22. Do not tell customers to wait for a shipping label or promise that one will be issued unless this is verified in the order record.
 
 OVERDUE DELIVERY RULES:
 
-21. The deliveryOverdue value is calculated by the application using the current date and verified order record.
-22. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
-23. Clearly explain that the recorded delivery date has passed.
-24. Do not present the old delivery date as a future delivery date.
-25. Do not invent a replacement delivery date or promise when the order will arrive.
-26. Acknowledge the delay and explain that the case requires support review.
-27. Never claim that a support investigation has already started.
+23. The deliveryOverdue value is calculated by the application using the current date and verified order record.
+24. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
+25. Clearly explain that the recorded delivery date has passed.
+26. Do not present the old delivery date as a future delivery date.
+27. Do not invent a replacement delivery date or promise when the order will arrive.
+28. Acknowledge the delay and explain that the case requires support review.
+29. Never claim that a support investigation has already started.
 
 The response is a draft for a support agent to review.
 
@@ -321,9 +325,20 @@ async function handleAnalyze(
     ? "High"
     : baseUrgency;
 
+  // Require human review when a recorded return request also has
+  // a pending refund. Do not assume return instructions or a label exist.
+  const refundStatus = String(order?.refund_status ?? "").toLowerCase();
+  const currentOrderStatus = String(order?.order_status ?? "").toLowerCase();
+
+  const pendingReturnNeedsReview =
+    intent === "Return/Replacement" &&
+    currentOrderStatus === "return requested" &&
+    refundStatus === "refund pending";
+
   const humanReviewRequired =
     ["Payment Issue", "Human Support"].includes(intent) ||
     deliveryOverdue ||
+    pendingReturnNeedsReview ||
     (intent === "Refund" &&
       /not arrived|overdue|late|two weeks|dispute/i.test(message));
 
@@ -401,9 +416,11 @@ async function handleAnalyze(
     response: responseText,
     reason: deliveryOverdue
       ? "The recorded delivery date has passed. This order requires human review."
-      : humanReviewRequired
-        ? "This request requires human review."
-        : "Response drafted using the available support context.",
+      : pendingReturnNeedsReview
+        ? "The return is requested and the refund is pending. Human review is required."
+        : humanReviewRequired
+          ? "This request requires human review."
+          : "Response drafted using the available support context.",
     order,
   };
 
