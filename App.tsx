@@ -83,10 +83,13 @@ export default function App() {
     window.setTimeout(() => setCopied(false), 1500);
   }
 
-  function reset() {
+  function clearConversation() {
+    if (busy) return;
+
     setMessage("");
     setResult(null);
     setError("");
+    setCopied(false);
     setConversationId(newId());
   }
 
@@ -144,22 +147,35 @@ export default function App() {
 
           <div className="input-actions">
             <span>{message.length}/5000 characters</span>
-            <button
-              className="primary"
-              onClick={analyze}
-              disabled={!message.trim() || busy}
-            >
-              {busy ? (
-                <>
-                  <Loader2 className="spin" size={16} />
-                  Analyzing…
-                </>
-              ) : (
-                <>
-                  Analyze message <Send size={15} />
-                </>
-              )}
-            </button>
+
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button
+                className="secondary"
+                onClick={clearConversation}
+                disabled={busy || (!message && !result && !error)}
+                type="button"
+              >
+                Clear
+              </button>
+
+              <button
+                className="primary"
+                onClick={analyze}
+                disabled={!message.trim() || busy}
+                type="button"
+              >
+                {busy ? (
+                  <>
+                    <Loader2 className="spin" size={16} />
+                    Analyzing…
+                  </>
+                ) : (
+                  <>
+                    Analyze message <Send size={15} />
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
           {error && (
@@ -192,11 +208,13 @@ export default function App() {
                 <strong>{result.intent}</strong>
                 <MessageSquare size={18} />
               </article>
+
               <article className="metric">
                 <span>Urgency</span>
                 <strong>{result.urgency}</strong>
                 <AlertTriangle size={18} />
               </article>
+
               <article className="metric">
                 <span>Human review</span>
                 <strong>
@@ -229,18 +247,24 @@ export default function App() {
                   <dl className="order-data">
                     <dt>Order number</dt>
                     <dd>{result.order?.order_number}</dd>
+
                     <dt>Product</dt>
                     <dd>{result.order?.product}</dd>
+
                     <dt>Order status</dt>
                     <dd>{result.order?.order_status}</dd>
+
                     <dt>Payment</dt>
                     <dd>{result.order?.payment_status}</dd>
+
                     <dt>Refund</dt>
                     <dd>{result.order?.refund_status || "Not recorded"}</dd>
+
                     <dt>Tracking</dt>
                     <dd>
                       {result.order?.tracking_number || "Not available"}
                     </dd>
+
                     <dt>Expected delivery</dt>
                     <dd>
                       {result.order?.expected_delivery || "Not provided"}
@@ -268,7 +292,7 @@ export default function App() {
                 </div>
 
                 <div className="response-actions">
-                  <button className="secondary" onClick={copy}>
+                  <button className="secondary" onClick={copy} type="button">
                     <Copy size={15} />
                     {copied ? "Copied!" : "Copy response"}
                   </button>
@@ -295,7 +319,11 @@ export default function App() {
             </div>
 
             <div className="bottom-actions">
-              <button className="text-button" onClick={reset}>
+              <button
+                className="text-button"
+                onClick={clearConversation}
+                type="button"
+              >
                 Start new conversation
               </button>
               <span>Ticket ID: {result.ticketId.slice(0, 8)}</span>
