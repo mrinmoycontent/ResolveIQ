@@ -1,16 +1,17 @@
+
 {
-  "name": "supportai-cloudflare",
+  "name": "resolveiq",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "cf-typegen": "wrangler types",
     "deploy": "npm run build && wrangler deploy",
-    "db:local": "wrangler d1 execute supportai-db --local --file=./schema.sql",
-    "db:remote": "wrangler d1 execute supportai-db --remote --file=./schema.sql"
+    "db:local": "wrangler d1 execute resolveiq-db --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute resolveiq-db --remote --file=./schema.sql"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
