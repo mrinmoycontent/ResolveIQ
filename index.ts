@@ -282,8 +282,8 @@ async function handleAnalyze(
 
   const updatedHistory: ChatMessage[] = [
     ...history,
-    { role: "user", content: message },
-    { role: "assistant", content: responseText },
+    { role: "user" as const, content: message },
+    { role: "assistant" as const, content: responseText },
   ].slice(-12);
 
   await env.DB.prepare(
