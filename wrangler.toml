@@ -1,0 +1,15 @@
+name = "supportai"
+main = "worker/index.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+assets = { directory = "./dist", binding = "ASSETS", not_found_handling = "single-page-application" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "supportai-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+APP_ENV = "production"
+# Set secrets with: npx wrangler secret put GROQ_API_KEY
+# Optional WhatsApp secrets are added when WhatsApp Cloud API is integrated.
