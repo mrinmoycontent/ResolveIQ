@@ -126,12 +126,12 @@ The response is a draft for a support agent to review.
     max_tokens: 250,
     messages: [
       {
-        role: "system",
+        role: "system" as const,
         content: system,
       },
       ...input.history.slice(-6),
       {
-        role: "user",
+        role: "user" as const,
         content: JSON.stringify({
           customerMessage: input.message,
           detectedIntent: input.intent,
@@ -227,7 +227,7 @@ async function handleAnalyze(
 
   try {
     history = existing?.messages_json
-      ? JSON.parse(existing.messages_json)
+      ? (JSON.parse(existing.messages_json) as ChatMessage[])
       : [];
   } catch {
     history = [];
@@ -276,8 +276,8 @@ async function handleAnalyze(
 
   const updatedHistory: ChatMessage[] = [
     ...history,
-    { role: "user", content: message },
-    { role: "assistant", content: responseText },
+    { role: "user" as const, content: message },
+    { role: "assistant" as const, content: responseText },
   ].slice(-12);
 
   await env.DB.prepare(
@@ -375,7 +375,7 @@ async function handleHistory(
 
   try {
     messages = row?.messages_json
-      ? JSON.parse(row.messages_json)
+      ? (JSON.parse(row.messages_json) as ChatMessage[])
       : [];
   } catch {
     messages = [];
