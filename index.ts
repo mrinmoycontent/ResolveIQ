@@ -157,7 +157,13 @@ The response is a draft for a support agent to review.
   );
 
   if (!response.ok) {
-    throw new Error(`Groq request failed (${response.status}).`);
+    const errorDetails = await response.text();
+
+    console.error("Groq API error:", response.status, errorDetails);
+
+    throw new Error(
+      `Groq request failed (${response.status}): ${errorDetails}`
+    );
   }
 
   const data = (await response.json()) as {
@@ -276,8 +282,8 @@ async function handleAnalyze(
 
   const updatedHistory: ChatMessage[] = [
     ...history,
-    { role: "user" as const, content: message },
-    { role: "assistant" as const, content: responseText },
+    { role: "user", content: message },
+    { role: "assistant", content: responseText },
   ].slice(-12);
 
   await env.DB.prepare(
