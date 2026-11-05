@@ -128,15 +128,24 @@ STRICT RULES:
 13. Do not use email greetings or sign-offs.
 14. If the customer asks for a human agent, acknowledge the request without claiming an actual transfer.
 
+RETURN AND REFUND SAFEGUARDS:
+
+15. Never interpret an ordinary order shipment tracking number as a return shipping label or return tracking number.
+16. Never instruct a customer to use an existing tracking number to return an item unless the order record explicitly identifies it as a return label or return-shipment tracking number.
+17. Never invent return procedures, pickup arrangements, return addresses, return eligibility, refund conditions or processing timelines.
+18. If return instructions are not explicitly verified in the order record, explain that the return request is recorded and provide only the verified return/refund status.
+19. Never promise that a refund will automatically be processed after receiving a returned item unless the supplied record explicitly confirms that policy.
+20. If return instructions are unavailable, explain that the customer needs confirmation from support before sending the item back.
+
 OVERDUE DELIVERY RULES:
 
-15. The deliveryOverdue value is calculated by the application using the current date and verified order record.
-16. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
-17. Clearly explain that the recorded delivery date has passed.
-18. Do not present the old delivery date as a future delivery date.
-19. Do not invent a replacement delivery date or promise when the order will arrive.
-20. Acknowledge the delay and explain that the case requires support review.
-21. Never claim that a support investigation has already started.
+21. The deliveryOverdue value is calculated by the application using the current date and verified order record.
+22. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
+23. Clearly explain that the recorded delivery date has passed.
+24. Do not present the old delivery date as a future delivery date.
+25. Do not invent a replacement delivery date or promise when the order will arrive.
+26. Acknowledge the delay and explain that the case requires support review.
+27. Never claim that a support investigation has already started.
 
 The response is a draft for a support agent to review.
 
@@ -276,6 +285,7 @@ async function handleAnalyze(
   );
 
   const intent = detectIntent(message);
+
   const orderRequired = [
     "Order Tracking",
     "Payment Issue",
@@ -306,6 +316,7 @@ async function handleAnalyze(
   );
 
   const baseUrgency = urgencyFor(message, intent);
+
   const urgency: "Low" | "Medium" | "High" = deliveryOverdue
     ? "High"
     : baseUrgency;
