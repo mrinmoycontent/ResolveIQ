@@ -18,8 +18,25 @@ function extractOrderNumber(
   message: string,
   previous?: string | null
 ): string | null {
-  const match = message.toUpperCase().match(/\bORD-\d{3,}\b/);
-  return match?.[0] ?? previous ?? null;
+  // Normalize Unicode dashes and invisible characters commonly introduced by copy/paste.
+  const normalizedMessage = message
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-");
+
+  const match = normalizedMessage
+    .toUpperCase()
+    .match(/(?:^|[^A-Z0-9])ORD\s*-\s*(\d{3,})(?!\d)/);
+
+  const extracted = match?.[1] ? `ORD-${match[1]}` : null;
+  const previousNormalized = previous
+    ?.normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-")
+    .replace(/\s+/g, "")
+    .toUpperCase() ?? null;
+
+  return extracted ?? previousNormalized;
 }
 
 function detectIntent(message: string): string {
@@ -82,8 +99,8 @@ async function getOrder(
   if (!orderNumber) return null;
 
   return db
-    .prepare("SELECT * FROM orders WHERE order_number = ?")
-    .bind(orderNumber)
+    .prepare("SELECT * FROM orders WHERE UPPER(TRIM(order_number)) = ? LIMIT 1")
+    .bind(orderNumber.trim().toUpperCase())
     .first<Order>();
 }
 
@@ -100,13 +117,23 @@ async function groqDraft(
     history: ChatMessage[];
   }
 ): Promise<string> {
-  // Deterministic response for a verified pending return/refund.
-  // Groq cannot override this response or promise refund processing.
+  // Return a deterministic, database-backed answer for a verified pending return.
+  // This bypasses Groq so it cannot ask for an order number already found or promise a refund.
+  const verifiedOrderStatus = String(input.order?.order_status ?? "")
+    .trim()
+    .toLowerCase();
+  const verifiedRefundStatus = String(input.order?.refund_status ?? "")
+    .trim()
+    .toLowerCase();
+
+  const pendingReturnRefund =
+    Boolean(input.order) &&
+    verifiedOrderStatus === "return requested" &&
+    verifiedRefundStatus === "refund pending";
+
   if (
-    input.intent === "Return/Replacement" &&
-    input.order &&
-    String(input.order.order_status).toLowerCase() === "return requested" &&
-    String(input.order.refund_status).toLowerCase() === "refund pending"
+    pendingReturnRefund &&
+    ["Return/Replacement", "Refund"].includes(input.intent)
   ) {
     return `Your return request for order ${input.orderNumber ?? "your order"} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
   }
@@ -147,19 +174,16 @@ RETURN AND REFUND SAFEGUARDS:
 20. Never promise that return instructions or a shipping label will be sent later unless the supplied order record explicitly confirms this.
 21. If return instructions are unavailable, explain that the customer needs confirmation from support before sending the item back.
 22. Do not tell customers to wait for a shipping label or promise that one will be issued unless this is verified in the order record.
-23. Never promise that a refund will be processed, approved or completed.
-24. Never promise a future update or provide an unverified refund timeline.
-25. When refund_status is pending, state only that the refund is pending and requires support review.
 
 OVERDUE DELIVERY RULES:
 
-26. The deliveryOverdue value is calculated by the application using the current date and verified order record.
-27. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
-28. Clearly explain that the recorded delivery date has passed.
-29. Do not present the old delivery date as a future delivery date.
-30. Do not invent a replacement delivery date or promise when the order will arrive.
-31. Acknowledge the delay and explain that the case requires support review.
-32. Never claim that a support investigation has already started.
+23. The deliveryOverdue value is calculated by the application using the current date and verified order record.
+24. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
+25. Clearly explain that the recorded delivery date has passed.
+26. Do not present the old delivery date as a future delivery date.
+27. Do not invent a replacement delivery date or promise when the order will arrive.
+28. Acknowledge the delay and explain that the case requires support review.
+29. Never claim that a support investigation has already started.
 
 The response is a draft for a support agent to review.
 
@@ -242,7 +266,7 @@ Current verified context:
     );
 
   const unsupportedPromise =
-    /\b(we(?:'ll| will) update you|we will keep you updated|as soon as we have|refund will be issued|will have our team review|our team will investigate|investigation has started|process the refund as soon as possible)\b/i.test(
+    /\b(we(?:'ll| will) update you|we will keep you updated|as soon as we have|refund will be issued|will have our team review|our team will investigate|investigation has started)\b/i.test(
       draft
     );
 
@@ -256,10 +280,10 @@ Current verified context:
   }
 
   if (
-    input.intent === "Return/Replacement" &&
+    ["Return/Replacement", "Refund"].includes(input.intent) &&
     order &&
-    String(order.order_status).toLowerCase() === "return requested" &&
-    String(order.refund_status).toLowerCase() === "refund pending"
+    String(order.order_status).trim().toLowerCase() === "return requested" &&
+    String(order.refund_status).trim().toLowerCase() === "refund pending"
   ) {
     return `Your return request for order ${orderLabel} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
   }
@@ -374,11 +398,11 @@ async function handleAnalyze(
     ? "High"
     : baseUrgency;
 
-  const refundStatus = String(order?.refund_status ?? "").toLowerCase();
-  const currentOrderStatus = String(order?.order_status ?? "").toLowerCase();
+  const refundStatus = String(order?.refund_status ?? "").trim().toLowerCase();
+  const currentOrderStatus = String(order?.order_status ?? "").trim().toLowerCase();
 
   const pendingReturnNeedsReview =
-    intent === "Return/Replacement" &&
+    ["Return/Replacement", "Refund"].includes(intent) &&
     currentOrderStatus === "return requested" &&
     refundStatus === "refund pending";
 
