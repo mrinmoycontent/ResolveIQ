@@ -117,29 +117,84 @@ async function groqDraft(
     history: ChatMessage[];
   }
 ): Promise<string> {
-  // Return a deterministic, database-backed answer for a verified pending return.
-  // This bypasses Groq so it cannot ask for an order number already found or promise a refund.
-  const verifiedOrderStatus = String(input.order?.order_status ?? "")
+  const orderLabel = input.orderNumber ?? "your order";
+  const order = input.order;
+
+  const verifiedOrderStatus = String(order?.order_status ?? "")
     .trim()
     .toLowerCase();
-  const verifiedRefundStatus = String(input.order?.refund_status ?? "")
+
+  const verifiedRefundStatus = String(order?.refund_status ?? "")
+    .trim()
+    .toLowerCase();
+
+  const verifiedPaymentStatus = String(order?.payment_status ?? "")
     .trim()
     .toLowerCase();
 
   const pendingReturnRefund =
-    Boolean(input.order) &&
+    Boolean(order) &&
     verifiedOrderStatus === "return requested" &&
     verifiedRefundStatus === "refund pending";
 
+  // Verified pending return: answer directly from D1 without calling Groq.
   if (
     pendingReturnRefund &&
     ["Return/Replacement", "Refund"].includes(input.intent)
   ) {
-    return `Your return request for order ${input.orderNumber ?? "your order"} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
+    return `Your return request for order ${orderLabel} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
   }
 
+  // Verified duplicate-charge case: answer directly from D1 without calling Groq.
+  if (input.intent === "Payment Issue" && order) {
+    const recordedRefund = order.refund_status
+      ? ` The recorded refund status is ${order.refund_status}.`
+      : "";
+
+    const duplicateCharge = verifiedPaymentStatus.includes("duplicate charge");
+
+    if (duplicateCharge) {
+      return `Our records show a duplicate charge for order ${orderLabel}.${recordedRefund} This payment issue requires human review. The available order record does not confirm that an investigation has started or that a refund has been approved.`;
+    }
+
+    return `Your payment concern for order ${orderLabel} requires human review.${recordedRefund} The available order record does not confirm that an investigation has started or that a refund has been approved.`;
+  }
+
+  // Safe response when Groq is unavailable or returns no usable text.
+  const safeFallback = (): string => {
+    if (input.deliveryOverdue && order) {
+      return `Your order ${orderLabel} was shipped, but its expected delivery date of ${order.expected_delivery} has passed. We understand your concern. This shipment requires support review so its current status can be verified.`;
+    }
+
+    if (pendingReturnRefund) {
+      return `Your return request for order ${orderLabel} has been recorded, and the current refund status is Pending. Please confirm the return instructions with support before sending the item back.`;
+    }
+
+    if (input.intent === "Payment Issue" && order) {
+      const recordedRefund = order.refund_status
+        ? ` The recorded refund status is ${order.refund_status}.`
+        : "";
+
+      return `Your payment concern for order ${orderLabel} requires human review.${recordedRefund} The available order record does not confirm that an investigation has started or that a refund has been approved.`;
+    }
+
+    if (!input.orderNumber && input.orderFound === null) {
+      return "Please share your order number so I can check the available order details.";
+    }
+
+    if (input.orderFound === false) {
+      return `I could not find order ${orderLabel} in the available records. Please check the order number and try again.`;
+    }
+
+    if (order) {
+      return `I found order ${orderLabel}. Its recorded status is ${order.order_status}. The available order record does not provide enough verified information to confirm the next step, so this request needs support review.`;
+    }
+
+    return "I can help with this request, but I do not have enough verified information to confirm the next step. Please check the details with support.";
+  };
+
   if (!env.GROQ_API_KEY) {
-    throw new Error("GROQ_API_KEY is not configured.");
+    return safeFallback();
   }
 
   const system = `
@@ -222,29 +277,32 @@ Current verified context:
     ],
   };
 
-  const response = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.GROQ_API_KEY}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    }
-  );
+  let response: Response;
+
+  try {
+    response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.GROQ_API_KEY}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+  } catch (error) {
+    console.error("Groq network error; using verified-data fallback:", error);
+    return safeFallback();
+  }
 
   if (!response.ok) {
     const errorDetails = await response.text();
-
     console.error("Groq API error:", response.status, errorDetails);
-
-    throw new Error(
-      `Groq request failed (${response.status}): ${errorDetails}`
-    );
+    return safeFallback();
   }
 
-  const data = (await response.json()) as {
+  let data: {
     choices?: Array<{
       message?: {
         content?: string;
@@ -252,10 +310,18 @@ Current verified context:
     }>;
   };
 
+  try {
+    data = (await response.json()) as typeof data;
+  } catch (error) {
+    console.error("Groq returned invalid JSON; using verified-data fallback:", error);
+    return safeFallback();
+  }
+
   const result = data.choices?.[0]?.message?.content;
 
   if (typeof result !== "string" || !result.trim()) {
-    throw new Error("Groq returned an empty response.");
+    console.error("Groq returned an empty response; using verified-data fallback.");
+    return safeFallback();
   }
 
   const draft = result.trim();
@@ -272,34 +338,7 @@ Current verified context:
 
   if (!incompleteEnding && !unsupportedPromise) return draft;
 
-  const order = input.order;
-  const orderLabel = input.orderNumber ?? "your order";
-
-  if (input.deliveryOverdue && order) {
-    return `Your order ${orderLabel} was shipped, but its expected delivery date of ${order.expected_delivery} has passed. We understand your concern. This shipment requires support review so its current status can be verified.`;
-  }
-
-  if (
-    ["Return/Replacement", "Refund"].includes(input.intent) &&
-    order &&
-    String(order.order_status).trim().toLowerCase() === "return requested" &&
-    String(order.refund_status).trim().toLowerCase() === "refund pending"
-  ) {
-    return `Your return request for order ${orderLabel} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
-  }
-
-  if (input.intent === "Payment Issue" && order) {
-    const refund =
-      order.refund_status && order.refund_status !== "Not Applicable"
-        ? ` The recorded refund status is ${order.refund_status}.`
-        : "";
-
-    return `Your order ${orderLabel} has been flagged for review because you reported a duplicate charge.${refund} The available order record does not confirm that an investigation has started, so a support review is required.`;
-  }
-
-  return order
-    ? `I found order ${orderLabel}. Its recorded status is ${order.order_status}. The available order record does not provide enough verified information to confirm the next step, so this request needs support review.`
-    : `I can help with this request, but I do not have enough verified information to confirm the next step. Please check the details with support.`;
+  return safeFallback();
 }
 
 async function handleAnalyze(
