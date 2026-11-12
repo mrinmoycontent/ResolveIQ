@@ -100,6 +100,17 @@ async function groqDraft(
     history: ChatMessage[];
   }
 ): Promise<string> {
+  // Deterministic response for a verified pending return/refund.
+  // Groq cannot override this response or promise refund processing.
+  if (
+    input.intent === "Return/Replacement" &&
+    input.order &&
+    String(input.order.order_status).toLowerCase() === "return requested" &&
+    String(input.order.refund_status).toLowerCase() === "refund pending"
+  ) {
+    return `Your return request for order ${input.orderNumber ?? "your order"} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
+  }
+
   if (!env.GROQ_API_KEY) {
     throw new Error("GROQ_API_KEY is not configured.");
   }
@@ -136,16 +147,19 @@ RETURN AND REFUND SAFEGUARDS:
 20. Never promise that return instructions or a shipping label will be sent later unless the supplied order record explicitly confirms this.
 21. If return instructions are unavailable, explain that the customer needs confirmation from support before sending the item back.
 22. Do not tell customers to wait for a shipping label or promise that one will be issued unless this is verified in the order record.
+23. Never promise that a refund will be processed, approved or completed.
+24. Never promise a future update or provide an unverified refund timeline.
+25. When refund_status is pending, state only that the refund is pending and requires support review.
 
 OVERDUE DELIVERY RULES:
 
-23. The deliveryOverdue value is calculated by the application using the current date and verified order record.
-24. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
-25. Clearly explain that the recorded delivery date has passed.
-26. Do not present the old delivery date as a future delivery date.
-27. Do not invent a replacement delivery date or promise when the order will arrive.
-28. Acknowledge the delay and explain that the case requires support review.
-29. Never claim that a support investigation has already started.
+26. The deliveryOverdue value is calculated by the application using the current date and verified order record.
+27. If deliveryOverdue is true, the recorded expected delivery date has already passed and the order has not been marked Delivered.
+28. Clearly explain that the recorded delivery date has passed.
+29. Do not present the old delivery date as a future delivery date.
+30. Do not invent a replacement delivery date or promise when the order will arrive.
+31. Acknowledge the delay and explain that the case requires support review.
+32. Never claim that a support investigation has already started.
 
 The response is a draft for a support agent to review.
 
@@ -228,7 +242,7 @@ Current verified context:
     );
 
   const unsupportedPromise =
-    /\b(we(?:'ll| will) update you|we will keep you updated|as soon as we have|refund will be issued|will have our team review|our team will investigate|investigation has started)\b/i.test(
+    /\b(we(?:'ll| will) update you|we will keep you updated|as soon as we have|refund will be issued|will have our team review|our team will investigate|investigation has started|process the refund as soon as possible)\b/i.test(
       draft
     );
 
@@ -263,6 +277,7 @@ Current verified context:
     ? `I found order ${orderLabel}. Its recorded status is ${order.order_status}. The available order record does not provide enough verified information to confirm the next step, so this request needs support review.`
     : `I can help with this request, but I do not have enough verified information to confirm the next step. Please check the details with support.`;
 }
+
 async function handleAnalyze(
   request: Request,
   env: Env
@@ -464,6 +479,7 @@ async function handleAnalyze(
     status: humanReviewRequired ? "Review Pending" : "AI Handled",
   });
 }
+
 async function handleHistory(
   request: Request,
   env: Env
@@ -507,6 +523,7 @@ async function handleHealth(): Promise<Response> {
     status: "running",
   });
 }
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
