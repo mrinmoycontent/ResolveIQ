@@ -238,7 +238,7 @@ Current verified context:
   const orderLabel = input.orderNumber ?? "your order";
 
   if (input.deliveryOverdue && order) {
-    return `Your order ${orderLabel} for the ${order.product_name} was shipped, but its expected delivery date of ${order.expected_delivery} has passed. We understand your concern. This shipment requires support review so its current status can be verified.`;
+    return `Your order ${orderLabel} was shipped, but its expected delivery date of ${order.expected_delivery} has passed. We understand your concern. This shipment requires support review so its current status can be verified.`;
   }
 
   if (
