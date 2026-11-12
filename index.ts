@@ -1,96 +1,160 @@
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.GROQ_API_KEY}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
 
-import type { Env, Order, Analysis } from "./types";
+  if (!response.ok) {
+    const errorDetails = await response.text();
 
-type ChatMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
+    console.error("Groq API error:", response.status, errorDetails);
 
-const json = (data: unknown, status = 200): Response =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
+    throw new Error(
+      `Groq request failed (${response.status}): ${errorDetails}`
+    );
+  }
 
-function extractOrderNumber(
-  message: string,
-  previous?: string | null
-): string | null {
-  const match = message.toUpperCase().match(/\bORD-\d{3,}\b/);
-  return match?.[0] ?? previous ?? null;
-}
+  const data = (await response.json()) as {
+    choices?: Array<{
+      message?: {
+        content?: string;
+      };
+    }>;
+  };
 
-function detectIntent(message: string): string {
-  const m = message.toLowerCase();
+  const result = data.choices?.[0]?.message?.content;
 
-  if (/charged twice|duplicate charge|double charge|charged two times/.test(m))
-    return "Payment Issue";
+  if (typeof result !== "string" || !result.trim()) {
+    throw new Error("Groq returned an empty response.");
+  }
 
-  // Return intent takes priority over refund intent.
-  // Customers commonly mention getting money back when requesting a return.
-  if (/return|replacement|wrong product|wrong item/.test(m))
-    return "Return/Replacement";
+  const draft = result.trim();
 
-  if (/refund|money back/.test(m))
-    return "Refund";
+  // Do not show a cut-off response or an unverified operational promise.
+  const incompleteEnding = /\b(and|or|but|as|with|to|for|of|the|a|an|we|our|have|has|will|when|once)\s*[,;:]?\s*$/i.test(draft);
+  const unsupportedPromise = /\b(we(?:'ll| will) update you|we will keep you updated|as soon as we have|refund will be issued|will have our team review|our team will investigate|investigation has started)\b/i.test(draft);
 
-  if (/where is my order|track|tracking|order status|delivery/.test(m))
-    return "Order Tracking";
+  if (!incompleteEnding && !unsupportedPromise) return draft;
 
-  if (/human|agent|representative|real person/.test(m))
-    return "Human Support";
+  const order = input.order;
+  const orderLabel = input.orderNumber ?? "your order";
 
-  if (/price|feature|product information/.test(m))
-    return "Product Information";
-
-  return "General FAQ";
-}
-
-function urgencyFor(
-  message: string,
-  intent: string
-): "Low" | "Medium" | "High" {
-  const m = message.toLowerCase();
+  if (input.deliveryOverdue && order) {
+    return `Your order ${orderLabel} for the ${order.product_name} was shipped, but its expected delivery date of ${order.expected_delivery} has passed. We understand your concern. This shipment requires support review so its current status can be verified.`;
+  }
 
   if (
-    intent === "Payment Issue" ||
-    intent === "Human Support" ||
-    /dispute|very late|two weeks|not arrived/.test(m)
+    input.intent === "Return/Replacement" &&
+    order &&
+    String(order.order_status).toLowerCase() === "return requested" &&
+    String(order.refund_status).toLowerCase() === "refund pending"
   ) {
-    return "High";
+    return `Your return request for order ${orderLabel} has been recorded, and the current refund status is Pending. The return procedure has not been verified in the available order record, so please confirm the instructions with support before sending the item back.`;
   }
 
-  if (intent === "Refund" || intent === "Return/Replacement")
-    return "Medium";
-
-  return "Low";
-}
-
-// Compares YYYY-MM-DD dates without timezone conversion.
-function isPastDate(dateValue: string | null | undefined): boolean {
-  if (!dateValue || !/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
-    return false;
+  if (input.intent === "Payment Issue" && order) {
+    const refund = order.refund_status && order.refund_status !== "Not Applicable"
+      ? ` The recorded refund status is ${order.refund_status}.`
+      : "";
+    return `Your order ${orderLabel} has been flagged for review because you reported a duplicate charge.${refund} The available order record does not confirm that an investigation has started, so a support review is required.`;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
-  return dateValue < today;
+  return order
+    ? `I found order ${orderLabel}. Its recorded status is ${order.order_status}. The available order record does not provide enough verified information to confirm the next step, so this request needs support review.`
+    : `I can help with this request, but I do not have enough verified information to confirm the next step. Please check the details with support.`;
 }
 
-async function getOrder(
-  db: D1Database,
-  orderNumber: string | null
-): Promise<Order | null> {
-  if (!orderNumber) return null;
+async function handleAnalyze(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  let body: {
+    message?: string;
+    conversationId?: string;
+    customerKey?: string;
+  };
 
-  return db
-    .prepare("SELECT * FROM orders WHERE order_number = ?")
-    .bind(orderNumber)
-    .first<Order>();
-}
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON request." }, 400);
+  }
 
-async function groqDraft(
-  env: Env,
-  input: {
+  const message = String(body.message ?? "").trim();
+
+  if (!message) {
+    return json({ error: "Enter a customer message." }, 400);
+  }
+
+  if (message.length > 5000) {
+    return json(
+      { error: "Message is too long. Maximum 5,000 characters." },
+      400
+    );
+  }
+
+  const conversationId =
+    String(body.conversationId ?? "").trim() || crypto.randomUUID();
+
+  const customerKey =
+    String(body.customerKey ?? conversationId).trim() || conversationId;
+
+  const existing = await env.DB.prepare(
+    `SELECT messages_json, last_order_number
+     FROM conversations
+     WHERE id = ?`
+  )
+    .bind(conversationId)
+    .first<{
+      messages_json: string;
+      last_order_number: string | null;
+    }>();
+
+  let history: ChatMessage[] = [];
+
+  try {
+    history = existing?.messages_json
+      ? (JSON.parse(existing.messages_json) as ChatMessage[])
+      : [];
+  } catch {
+    history = [];
+  }
+
+  const orderNumber = extractOrderNumber(
+    message,
+    existing?.last_order_number
+  );
+
+  const intent = detectIntent(message);
+
+  const orderRequired = [
+    "Order Tracking",
+    "Payment Issue",
+    "Refund",
+    "Return/Replacement",
+  ].includes(intent);
+
+  const order = orderRequired
+    ? await getOrder(env.DB, orderNumber)
+    : null;
+
+  const orderFound =
+    !orderRequired
+      ? null
+      : orderNumber
+        ? Boolean(order)
+        : null;
+
+  // Only undelivered orders with an expired expected delivery date
+  // are considered overdue.
+  const orderStatus = String(order?.order_status ?? "").toLowerCase();
+
+  const deliveryOverdue = Boolean(
+    order &&
+      orderStatus !== "delivered" &&
+      orderStatus !== "cancelled" &&
+      isPastDate(order.expected_delivery)
